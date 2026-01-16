@@ -20,9 +20,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Timer? _timer;
   double _spo2 = 0.0, _riskScore = 0.0;
   int _bpm = 0;
+  int? _currentDataId; 
   String _status = "INITIALISATION", _recommendation = "Connexion...";
   Color _accentColor = Colors.blueGrey;
   bool _showEmergency = false;
+  bool _feedbackSentForThisAlert = false;
   String _lastNotifiedStatus = "";
 
   final List<FlSpot> _spo2Spots = [];
@@ -32,7 +34,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 2), (t) => _fetchLatestData());
+    _timer = Timer.periodic(const Duration(seconds: 3), (t) => _fetchLatestData());
   }
 
   @override
@@ -50,6 +52,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (res.statusCode == 200 && mounted) {
         final d = jsonDecode(res.body);
         setState(() {
+          _currentDataId = d['data_id'];
           _spo2 = (d['spo2'] ?? 0.0).toDouble();
           _bpm = (d['bpm'] ?? 0).toInt();
           _status = d['status'] ?? "STABLE";
@@ -57,6 +60,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _riskScore = (d['risk_score'] ?? 0.0).toDouble();
           _showEmergency = d['emergency'] ?? false;
           _accentColor = _getColor(d['color']);
+
+          if (_status == "STABLE") _feedbackSentForThisAlert = false;
 
           _timerCounter++;
           _spo2Spots.add(FlSpot(_timerCounter, _spo2));
@@ -81,6 +86,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     } catch (e) {
       debugPrint("Erreur Dashboard API: $e");
+    }
+  }
+
+  Future<void> _submitFeedback(int outcome, String note) async {
+    if (_currentDataId == null) return;
+    
+    HapticFeedback.selectionClick();
+    bool success = await ApiService.sendFeedback(_currentDataId!, outcome, note);
+    
+    if (success && mounted) {
+      setState(() => _feedbackSentForThisAlert = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(outcome == 1 ? "Alerte confirmée. Votre médecin est informé." : "Merci, nous ajustons votre profil."),
+          backgroundColor: outcome == 1 ? Colors.redAccent : Colors.green,
+        ),
+      );
     }
   }
 
@@ -121,19 +143,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             children: [
               _buildStatusCard(),
+              if (_status != "STABLE" && !_feedbackSentForThisAlert) _buildFeedbackPrompt(),
               if (_showEmergency) _buildEmergencyButton(),
               const SizedBox(height: 20),
               _buildChartSection(),
               const SizedBox(height: 20),
               Row(
                 children: [
-                  Expanded(child: _buildMetricTile(
-                    "Saturation O₂", "$_spo2%", Icons.air, Colors.lightBlue
-                  )),
+                  Expanded(child: _buildMetricTile("Saturation O₂", "$_spo2%", Icons.air, Colors.lightBlue)),
                   const SizedBox(width: 15),
-                  Expanded(child: _buildMetricTile(
-                    "Pulsations", "$_bpm BPM", Icons.favorite, Colors.redAccent
-                  )),
+                  Expanded(child: _buildMetricTile("Pulsations", "$_bpm BPM", Icons.favorite, Colors.redAccent)),
                 ],
               ),
               const SizedBox(height: 20),
@@ -141,6 +160,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildFeedbackPrompt() {
+    return Container(
+      margin: const EdgeInsets.only(top: 15),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: _accentColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _accentColor.withOpacity(0.5))
+      ),
+      child: Column(
+        children: [
+          const Text("Confirmez-vous une gêne respiratoire ?", 
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _submitFeedback(0, "Tout va bien"),
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.green),
+                  child: const Text("Non, ça va"),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => _submitFeedback(1, "Gêne confirmée via app"),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                  child: const Text("Oui, je suis gêné"),
+                ),
+              ),
+            ],
+          )
+        ],
       ),
     );
   }
@@ -170,20 +227,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 size: 30,
               ),
               const SizedBox(width: 10),
-              Text(
-                _status,
-                style: TextStyle(
-                  color: _accentColor,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900
-                ),
-              ),
+              Text(_status, style: TextStyle(color: _accentColor, fontSize: 28, fontWeight: FontWeight.w900)),
             ],
           ),
           const Divider(height: 30),
-          Text(
-            _recommendation,
-            textAlign: TextAlign.center,
+          Text(_recommendation, textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.blueGrey),
           ),
         ],
@@ -192,8 +240,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildChartSection() {
-    bool hasEnoughData = _spo2Spots.length >= 2 && _bpmSpots.length >= 2;
-
+    bool hasEnoughData = _spo2Spots.length >= 2;
     return Container(
       height: 220,
       padding: const EdgeInsets.fromLTRB(10, 20, 20, 10),
@@ -213,12 +260,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Row(
                   children: [
                     Icon(Icons.circle, size: 8, color: Colors.lightBlue),
-                    SizedBox(width: 4),
-                    Text("O2", style: TextStyle(fontSize: 10)),
+                    SizedBox(width: 4), Text("O2", style: TextStyle(fontSize: 10)),
                     SizedBox(width: 10),
                     Icon(Icons.circle, size: 8, color: Colors.redAccent),
-                    SizedBox(width: 4),
-                    Text("BPM", style: TextStyle(fontSize: 10)),
+                    SizedBox(width: 4), Text("BPM", style: TextStyle(fontSize: 10)),
                   ],
                 ),
               ],
@@ -227,7 +272,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 15),
           Expanded(
             child: !hasEnoughData 
-              ? const Center(child: Text("Collecte des données...", style: TextStyle(color: Colors.grey)))
+              ? const Center(child: CircularProgressIndicator())
               : LineChart(
                   LineChartData(
                     gridData: const FlGridData(show: false),
@@ -266,15 +311,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Provider.of<AuthProvider>(context, listen: false).patientName ?? "Patient"
         ),
         icon: const Icon(Icons.emergency_share, color: Colors.white),
-        label: const Text(
-          "DÉCLENCHER ALERTE URGENCE",
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.1),
-        ),
+        label: const Text("DÉCLENCHER ALERTE URGENCE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.red[700],
           minimumSize: const Size(double.infinity, 65),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          elevation: 5,
         ),
       ),
     );
@@ -319,7 +360,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text("INDICE DE RISQUE IA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blueGrey)),
-                  Text("Analyse prédictive en cours", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                  Text("Analyse prédictive XGBoost", style: TextStyle(fontSize: 10, color: Colors.grey)),
                 ],
               ),
               Icon(Icons.auto_awesome, size: 20, color: _accentColor),
@@ -334,8 +375,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             borderRadius: BorderRadius.circular(10),
           ),
           const SizedBox(height: 12),
-          Text(
-            "${(_riskScore * 100).toInt()}% d'essoufflement critique prédit",
+          Text("${(_riskScore * 100).toInt()}% de risque détecté",
             style: TextStyle(fontWeight: FontWeight.bold, color: _accentColor, fontSize: 14),
           ),
         ],

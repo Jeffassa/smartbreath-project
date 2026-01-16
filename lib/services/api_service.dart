@@ -3,12 +3,40 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  static const String baseUrl = "http://127.0.0.1:8000";
+  static const String baseUrl = "http://10.0.2.2:8000";
 
   static Map<String, String> get _headers => {
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-  };
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      };
+
+  static Future<Map<String, dynamic>> analyzeHealth(Map<String, dynamic> sensorData) async {
+    try {
+      final response = await post("/analyze", sensorData);
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception("Échec de l'analyse IA: ${response.statusCode}");
+      }
+    } catch (e) {
+      throw Exception("Erreur lors de l'analyse santé: $e");
+    }
+  }
+
+  static Future<bool> sendFeedback(int dataId, int outcome, String comment) async {
+    try {
+      final data = {
+        "data_id": dataId,
+        "actual_outcome": outcome,
+        "comment": comment,
+      };
+      final response = await post("/feedback", data);
+      return response.statusCode == 200;
+    } catch (e) {
+      if (kDebugMode) print("Erreur envoi feedback: $e");
+      return false;
+    }
+  }
 
   static Future<http.Response> post(String endpoint, Map<String, dynamic> data) async {
     try {
@@ -36,6 +64,7 @@ class ApiService {
       throw Exception("Erreur réseau GET: $e");
     }
   }
+
   static Future<http.Response> put(String endpoint, Map<String, dynamic> data) async {
     try {
       _logRequest("PUT", endpoint, data);
@@ -77,19 +106,20 @@ class ApiService {
     }
   }
 
-
   static void _logRequest(String method, String endpoint, [Map<String, dynamic>? data]) {
     if (kDebugMode) {
-      print("API $method: $baseUrl$endpoint");
-      if (data != null) print("Body: $data");
+      print(" API $method: $baseUrl$endpoint");
+      if (data != null) print(" Body: ${jsonEncode(data)}");
     }
   }
 
   static http.Response _handleResponse(http.Response response) {
     if (kDebugMode) {
-      print(" Status: ${response.statusCode}");
+      print("Status: ${response.statusCode}");
       if (response.statusCode >= 400) {
-        print(" Erreur: ${response.body}");
+        print("Erreur Serveur: ${response.body}");
+      } else {
+        print("Réponse: ${response.body}");
       }
     }
     return response;

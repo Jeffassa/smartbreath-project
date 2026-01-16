@@ -6,14 +6,17 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
 
   static Future<void> init() async {
+    // Configuration Android
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
+    // Configuration iOS
     const DarwinInitializationSettings initializationSettingsIOS =
         DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
+      requestCriticalPermission: true, 
     );
 
     const InitializationSettings initializationSettings = InitializationSettings(
@@ -36,22 +39,27 @@ class NotificationService {
 
   static Future<void> showCriticalAlert(String status, String recommendation) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'critical_alerts',
-      'Alertes Critiques',
-      channelDescription: 'Notifications IA prédictives pour urgences',
+      'critical_alerts_v1', 
+      'Alertes Urgentes SmartBreath',
+      channelDescription: 'Notifications IA prioritaires pour détresse respiratoire',
       importance: Importance.max,
-      priority: Priority.high,
-      color: Color(0xFFFF0000),
+      priority: Priority.max,
+      color: Colors.red,
+      backgroundColor: Colors.red,
       playSound: true,
       enableVibration: true,
-      fullScreenIntent: true,
+    
+      vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]), 
+      fullScreenIntent: true, 
+      category: AndroidNotificationCategory.alarm,
     );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
-      interruptionLevel: InterruptionLevel.critical,
+      interruptionLevel: InterruptionLevel.critical, 
+      sound: 'default',
     );
 
     const NotificationDetails platformDetails = NotificationDetails(
@@ -61,7 +69,7 @@ class NotificationService {
 
     await _notificationsPlugin.show(
       0,
-      " ALERTE IA: $status",
+      "ALERTE CRITIQUE : $status",
       recommendation,
       platformDetails,
       payload: 'critical_alert',
@@ -70,18 +78,19 @@ class NotificationService {
 
   static Future<void> showPreventiveAlert(String recommendation) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'preventive_alerts',
+      'preventive_alerts_v1',
       'Alertes Préventives',
-      channelDescription: 'Alertes basées sur les tendances détectées',
+      channelDescription: 'Conseils basés sur l\'analyse prédictive IA',
       importance: Importance.high,
       priority: Priority.high,
-      color: Color(0xFFFFA500),
+      color: Colors.orange,
       playSound: true,
     );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentSound: true,
+      interruptionLevel: InterruptionLevel.active,
     );
 
     const NotificationDetails platformDetails = NotificationDetails(
@@ -91,7 +100,7 @@ class NotificationService {
 
     await _notificationsPlugin.show(
       1,
-      "PRÉVENTION IA",
+      "SmartBreath : Prévention IA",
       recommendation,
       platformDetails,
       payload: 'preventive_alert',
