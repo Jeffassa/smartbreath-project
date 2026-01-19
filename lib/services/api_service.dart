@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  static const String baseUrl = "http://10.0.2.2:8000";
+  static const String baseUrl = "http://192.168.1.7:8000";
 
   static Map<String, String> get _headers => {
         "Content-Type": "application/json",
@@ -58,7 +58,7 @@ class ApiService {
       final response = await http.get(
         Uri.parse("$baseUrl$endpoint"),
         headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 20));
       return _handleResponse(response);
     } catch (e) {
       throw Exception("Erreur réseau GET: $e");

@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
 import '../../services/api_service.dart';
 import '../../services/auth_provider.dart';
 import '../../services/notification_service.dart';
 import '../../services/emergency_service.dart';
+import 'bluetooth_search_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -21,11 +23,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _spo2 = 0.0, _riskScore = 0.0;
   int _bpm = 0;
   int? _currentDataId; 
-  String _status = "INITIALISATION", _recommendation = "Connexion...";
+  String _status = "INITIALISATION", _recommendation = "En attente de données...";
   Color _accentColor = Colors.blueGrey;
   bool _showEmergency = false;
   bool _feedbackSentForThisAlert = false;
   String _lastNotifiedStatus = "";
+
+  BluetoothDevice? _connectedDevice;
+  StreamSubscription? _notifySubscription;
+  StreamSubscription? _connectionStateSubscription;
 
   final List<FlSpot> _spo2Spots = [];
   final List<FlSpot> _bpmSpots = [];
@@ -34,15 +40,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    // Démarrage du timer pour rafraîchir l'interface toutes les 3 secondes
     _timer = Timer.periodic(const Duration(seconds: 3), (t) => _fetchLatestData());
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _notifySubscription?.cancel();
+    _connectionStateSubscription?.cancel();
+    _connectedDevice?.disconnect();
     super.dispose();
   }
 
+  void _handleBluetoothConnection(BluetoothDevice device) async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    try {
+      await device.connect();
+      setState(() => _connectedDevice = device);
+
+      _connectionStateSubscription = device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected && mounted) {
+          setState(() => _connectedDevice = null);
+        }
+      });
+
+      List<BluetoothService> services = await device.discoverServices();
+      for (var service in services) {
+        for (var characteristic in service.characteristics) {
+          if (characteristic.properties.notify) {
+            await characteristic.setNotifyValue(true);
+            _notifySubscription = characteristic.lastValueStream.listen((value) {
+              _processAndSendData(value, auth.patientId);
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Erreur Bluetooth : $e");
+    }
+  }
+
+  void _processAndSendData(List<int> rawData, String? patientId) async {
+    if (patientId == null || rawData.isEmpty) return;
+    try {
+      String decodedString = utf8.decode(rawData);
+      List<String> values = decodedString.split(',');
+      if (values.length < 2) return;
+
+      final Map<String, dynamic> jsonData = {
+        "patient_id": patientId,
+        "spo2": double.tryParse(values[0]) ?? 0.0,
+        "bpm": int.tryParse(values[1]) ?? 0,
+        "flow_rate": 15.0, 
+        "muscle_strength": 5.0,
+        "temperature": 36.6
+      };
+      await ApiService.post("/analyze", jsonData);
+    } catch (e) {
+      debugPrint("Erreur Envoi IoT : $e");
+    }
+  }
+
+  // --- RÉCUPÉRATION DES DONNÉES (FILTRÉES) ---
   Future<void> _fetchLatestData() async {
     final auth = Provider.of<AuthProvider>(context, listen: false);
     if (auth.patientId == null) return;
@@ -51,12 +111,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final res = await ApiService.get("/status/${auth.patientId}");
       if (res.statusCode == 200 && mounted) {
         final d = jsonDecode(res.body);
+        
+        // SÉCURITÉ : Si les données sont à 0, on ignore pour éviter la "crise fantôme"
+        if ((d['spo2'] ?? 0) == 0 && (d['bpm'] ?? 0) == 0) {
+          setState(() {
+            _status = "EN ATTENTE";
+            _recommendation = "Lancez le simulateur pour voir les données.";
+            _accentColor = Colors.blueGrey;
+          });
+          return;
+        }
+
         setState(() {
           _currentDataId = d['data_id'];
           _spo2 = (d['spo2'] ?? 0.0).toDouble();
           _bpm = (d['bpm'] ?? 0).toInt();
           _status = d['status'] ?? "STABLE";
-          _recommendation = d['recommendation'] ?? "Patient en observation";
+          _recommendation = d['recommendation'] ?? "Analyse en cours...";
           _riskScore = (d['risk_score'] ?? 0.0).toDouble();
           _showEmergency = d['emergency'] ?? false;
           _accentColor = _getColor(d['color']);
@@ -67,42 +138,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _spo2Spots.add(FlSpot(_timerCounter, _spo2));
           _bpmSpots.add(FlSpot(_timerCounter, _bpm.toDouble()));
 
-          if (_spo2Spots.length > 30) {
+          if (_spo2Spots.length > 20) {
             _spo2Spots.removeAt(0);
             _bpmSpots.removeAt(0);
           }
         });
 
+        // Notifications
         if (_status != _lastNotifiedStatus) {
           _lastNotifiedStatus = _status;
           if (_status == "CRITIQUE") {
-            HapticFeedback.heavyImpact();
-            NotificationService.showCriticalAlert("ALERTE CRITIQUE", _recommendation);
-          } else if (_status == "PRÉVENTION") {
-            HapticFeedback.mediumImpact();
-            NotificationService.showPreventiveAlert(_recommendation);
+            HapticFeedback.vibrate();
+            NotificationService.showCriticalAlert("URGENCE RESPIRATOIRE", _recommendation);
           }
         }
       }
     } catch (e) {
-      debugPrint("Erreur Dashboard API: $e");
-    }
-  }
-
-  Future<void> _submitFeedback(int outcome, String note) async {
-    if (_currentDataId == null) return;
-    
-    HapticFeedback.selectionClick();
-    bool success = await ApiService.sendFeedback(_currentDataId!, outcome, note);
-    
-    if (success && mounted) {
-      setState(() => _feedbackSentForThisAlert = true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(outcome == 1 ? "Alerte confirmée. Votre médecin est informé." : "Merci, nous ajustons votre profil."),
-          backgroundColor: outcome == 1 ? Colors.redAccent : Colors.green,
-        ),
-      );
+      debugPrint("Erreur Sync API : $e");
     }
   }
 
@@ -116,6 +168,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // --- INTERFACE (WIDGETS) ---
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
@@ -123,16 +176,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF0F7FA),
       appBar: AppBar(
-        title: Text("Santé de ${auth.patientName ?? 'Patient'}"),
-        centerTitle: true,
+        title: Text("Santé de ${auth.patientName ?? 'Patient'}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.sync),
-            onPressed: _fetchLatestData,
+            icon: Icon(Icons.bluetooth, color: _connectedDevice != null ? Colors.green : Colors.grey),
+            onPressed: () async {
+              final device = await Navigator.push(context, MaterialPageRoute(builder: (context) => const BluetoothSearchScreen()));
+              if (device != null && device is BluetoothDevice) _handleBluetoothConnection(device);
+            },
           ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchLatestData),
         ],
       ),
       body: RefreshIndicator(
@@ -143,7 +199,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             children: [
               _buildStatusCard(),
-              if (_status != "STABLE" && !_feedbackSentForThisAlert) _buildFeedbackPrompt(),
+              if (_status != "STABLE" && _status != "EN ATTENTE" && !_feedbackSentForThisAlert) _buildFeedbackPrompt(),
               if (_showEmergency) _buildEmergencyButton(),
               const SizedBox(height: 20),
               _buildChartSection(),
@@ -164,159 +220,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildFeedbackPrompt() {
-    return Container(
-      margin: const EdgeInsets.only(top: 15),
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: _accentColor.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _accentColor.withOpacity(0.5))
-      ),
-      child: Column(
-        children: [
-          const Text("Confirmez-vous une gêne respiratoire ?", 
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _submitFeedback(0, "Tout va bien"),
-                  style: OutlinedButton.styleFrom(foregroundColor: Colors.green),
-                  child: const Text("Non, ça va"),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () => _submitFeedback(1, "Gêne confirmée via app"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-                  child: const Text("Oui, je suis gêné"),
-                ),
-              ),
-            ],
-          )
-        ],
-      ),
-    );
-  }
-
   Widget _buildStatusCard() {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
+      duration: const Duration(milliseconds: 500),
       width: double.infinity,
       padding: const EdgeInsets.all(25),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(30),
-        boxShadow: [
-          BoxShadow(color: _accentColor.withOpacity(0.15), blurRadius: 20, offset: const Offset(0, 10))
-        ],
-        border: Border.all(color: _accentColor.withOpacity(0.3), width: 2),
+        boxShadow: [BoxShadow(color: _accentColor.withOpacity(0.1), blurRadius: 20)],
+        border: Border.all(color: _accentColor.withOpacity(0.5), width: 2),
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _status == "CRITIQUE" ? Icons.warning_amber_rounded : 
-                _status == "PRÉVENTION" ? Icons.info_outline : Icons.check_circle_outline,
-                color: _accentColor,
-                size: 30,
-              ),
-              const SizedBox(width: 10),
-              Text(_status, style: TextStyle(color: _accentColor, fontSize: 28, fontWeight: FontWeight.w900)),
-            ],
-          ),
-          const Divider(height: 30),
-          Text(_recommendation, textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.blueGrey),
-          ),
+          Text(_status, style: TextStyle(color: _accentColor, fontSize: 32, fontWeight: FontWeight.black)),
+          const SizedBox(height: 10),
+          Text(_recommendation, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[600], fontWeight: FontWeight.w500)),
         ],
       ),
     );
   }
 
   Widget _buildChartSection() {
-    bool hasEnoughData = _spo2Spots.length >= 2;
     return Container(
-      height: 220,
-      padding: const EdgeInsets.fromLTRB(10, 20, 20, 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15)],
-      ),
-      child: Column(
-        children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text("MONITORING LIVE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
-                Row(
-                  children: [
-                    Icon(Icons.circle, size: 8, color: Colors.lightBlue),
-                    SizedBox(width: 4), Text("O2", style: TextStyle(fontSize: 10)),
-                    SizedBox(width: 10),
-                    Icon(Icons.circle, size: 8, color: Colors.redAccent),
-                    SizedBox(width: 4), Text("BPM", style: TextStyle(fontSize: 10)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 15),
-          Expanded(
-            child: !hasEnoughData 
-              ? const Center(child: CircularProgressIndicator())
-              : LineChart(
-                  LineChartData(
-                    gridData: const FlGridData(show: false),
-                    titlesData: const FlTitlesData(show: false),
-                    borderData: FlBorderData(show: false),
-                    lineBarsData: [
-                      LineChartBarData(
-                        spots: _spo2Spots,
-                        isCurved: true,
-                        color: Colors.lightBlue,
-                        barWidth: 3,
-                        dotData: const FlDotData(show: false),
-                        belowBarData: BarAreaData(show: true, color: Colors.lightBlue.withOpacity(0.1)),
-                      ),
-                      LineChartBarData(
-                        spots: _bpmSpots,
-                        isCurved: true,
-                        color: Colors.redAccent.withOpacity(0.5),
-                        barWidth: 2,
-                        dotData: const FlDotData(show: false),
-                      ),
-                    ],
-                  ),
-                ),
-          ),
+      height: 200,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(30)),
+      child: LineChart(LineChartData(
+        gridData: const FlGridData(show: false),
+        titlesData: const FlTitlesData(show: false),
+        borderData: FlBorderData(show: false),
+        lineBarsData: [
+          LineChartBarData(spots: _spo2Spots, isCurved: true, color: Colors.blue, barWidth: 4, dotData: const FlDotData(show: false)),
+          LineChartBarData(spots: _bpmSpots, isCurved: true, color: Colors.red.withOpacity(0.3), barWidth: 2, dotData: const FlDotData(show: false)),
         ],
-      ),
+      )),
     );
   }
 
-  Widget _buildEmergencyButton() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 20),
-      child: ElevatedButton.icon(
-        onPressed: () => EmergencyService.triggerFullEmergency(
-          Provider.of<AuthProvider>(context, listen: false).patientName ?? "Patient"
-        ),
-        icon: const Icon(Icons.emergency_share, color: Colors.white),
-        label: const Text("DÉCLENCHER ALERTE URGENCE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.red[700],
-          minimumSize: const Size(double.infinity, 65),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        ),
+  Widget _buildRiskSection() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(25)),
+      child: Column(
+        children: [
+          const Text("ANALYSE PRÉDICTIVE XGBOOST", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const SizedBox(height: 15),
+          LinearProgressIndicator(value: _riskScore, minHeight: 10, color: _accentColor, backgroundColor: Colors.grey[200], borderRadius: BorderRadius.circular(10)),
+          const SizedBox(height: 10),
+          Text("${(_riskScore * 100).toStringAsFixed(1)}% de probabilité de crise", style: TextStyle(fontWeight: FontWeight.bold, color: _accentColor)),
+        ],
       ),
     );
   }
@@ -324,62 +277,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildMetricTile(String label, String value, IconData icon, Color color) {
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(25),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10)],
-      ),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(25)),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: color.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(icon, color: color, size: 24),
-          ),
-          const SizedBox(height: 12),
-          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.w500)),
+          Icon(icon, color: color),
+          const SizedBox(height: 10),
+          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
         ],
       ),
     );
   }
 
-  Widget _buildRiskSection() {
+  Widget _buildFeedbackPrompt() {
     return Container(
-      padding: const EdgeInsets.all(25),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
-      ),
+      margin: const EdgeInsets.only(top: 15),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
       child: Column(
         children: [
+          const Text("L'IA détecte une anomalie. Est-ce correct ?", style: TextStyle(fontWeight: FontWeight.bold)),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("INDICE DE RISQUE IA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blueGrey)),
-                  Text("Analyse prédictive XGBoost", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                ],
-              ),
-              Icon(Icons.auto_awesome, size: 20, color: _accentColor),
+              TextButton(onPressed: () => _submitFeedback(0, "Fausse alerte"), child: const Text("NON")),
+              TextButton(onPressed: () => _submitFeedback(1, "Gêne confirmée"), child: const Text("OUI, JE SENS UNE GÊNE", style: TextStyle(color: Colors.red))),
             ],
-          ),
-          const SizedBox(height: 20),
-          LinearProgressIndicator(
-            value: _riskScore,
-            minHeight: 12,
-            color: _accentColor,
-            backgroundColor: Colors.grey[100],
-            borderRadius: BorderRadius.circular(10),
-          ),
-          const SizedBox(height: 12),
-          Text("${(_riskScore * 100).toInt()}% de risque détecté",
-            style: TextStyle(fontWeight: FontWeight.bold, color: _accentColor, fontSize: 14),
-          ),
+          )
         ],
       ),
     );
+  }
+
+  Widget _buildEmergencyButton() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 15),
+      child: ElevatedButton(
+        onPressed: () => EmergencyService.triggerFullEmergency(Provider.of<AuthProvider>(context, listen: false).patientName ?? "Patient"),
+        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size(double.infinity, 60)),
+        child: const Text("APPEL D'URGENCE SMS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
+
+  Future<void> _submitFeedback(int outcome, String note) async {
+    if (_currentDataId == null) return;
+    bool success = await ApiService.sendFeedback(_currentDataId!, outcome, note);
+    if (success && mounted) {
+      setState(() => _feedbackSentForThisAlert = true);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Merci, l'IA apprend de votre retour.")));
+    }
   }
 }

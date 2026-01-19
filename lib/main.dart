@@ -58,7 +58,7 @@ class SmartBreathApp extends StatelessWidget {
           ),
         ),
 
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           elevation: 2,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           color: Colors.white,

@@ -81,10 +81,13 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.medical_services_rounded,
-                  size: 90,
-                  color: primaryColor,
+                Image.asset(
+                  'assets/images/logo11.png',
+                  height: 70, 
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Icon(Icons.medical_services_rounded, size: 90, color: primaryColor);
+                  },
                 ),
                 const SizedBox(height: 20),
                 const Text(

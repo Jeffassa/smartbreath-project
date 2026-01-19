@@ -1,8 +1,10 @@
+import 'dart:async'; 
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
 import '../../services/api_service.dart';
 import '../../services/auth_provider.dart';
 
@@ -18,63 +20,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   final ImagePicker _picker = ImagePicker();
-  File? _localImage; 
+  File? _localImage;
+
+  bool _isConnected = false;
+  StreamSubscription? _bluetoothSubscription;
 
   @override
   void initState() {
     super.initState();
-    _fetchUserProfile();
+    Future.microtask(() => _fetchUserProfile());
+    _monitorBluetoothConnection(); 
   }
 
-  Future<void> _pickAndUploadImage() async {
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    
-    try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 512,
-        imageQuality: 75,
-      );
+  @override
+  void dispose() {
+    _bluetoothSubscription?.cancel();
+    super.dispose();
+  }
 
-      if (image == null) return;
-
-      setState(() {
-        _localImage = File(image.path);
-        _isLoading = true;
-      });
-
-      final bytes = await _localImage!.readAsBytes();
-      final String base64Image = base64Encode(bytes);
-
-      final response = await ApiService.put("/profile/${auth.patientId}", {
-        "photo_base64": base64Image,
-      });
-
-      if (response.statusCode == 200) {
-        await _fetchUserProfile();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Photo de profil synchronisée !"), backgroundColor: Colors.green)
-          );
-        }
-      }
-    } catch (e) {
+  void _monitorBluetoothConnection() {
+    _bluetoothSubscription = FlutterBluePlus.adapterState.listen((state) async {
+      final connectedDevices = await FlutterBluePlus.connectedSystemDevices;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Erreur : $e"), backgroundColor: Colors.red)
-        );
+        setState(() {
+          _isConnected = connectedDevices.isNotEmpty;
+        });
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+    });
   }
 
   Future<void> _fetchUserProfile() async {
     final auth = Provider.of<AuthProvider>(context, listen: false);
     
     if (auth.patientId == null) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    if (auth.patientId == null) {
       setState(() {
-        _errorMessage = "Patient ID introuvable";
+        _errorMessage = "Patient ID introuvable. Reconnectez-vous.";
         _isLoading = false;
       });
       return;
@@ -85,110 +69,79 @@ class _ProfileScreenState extends State<ProfileScreen> {
       
       if (response.statusCode == 200 && mounted) {
         final Map<String, dynamic> decodedResponse = jsonDecode(response.body);
+        
         setState(() {
-          _userData = decodedResponse['data'];
+          _userData = decodedResponse.containsKey('data') 
+              ? decodedResponse['data'] 
+              : decodedResponse;
           _isLoading = false;
           _errorMessage = null;
-          _localImage = null; 
         });
       } else {
-        throw Exception("Erreur serveur : ${response.statusCode}");
+        setState(() {
+          _errorMessage = "Profil non trouvé (Code: ${response.statusCode})";
+          _isLoading = false;
+        });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = "Erreur réseau : $e";
+          _errorMessage = "Erreur de connexion au serveur";
         });
       }
     }
   }
 
-  void _showEditDialog() {
-    if (_userData == null) return;
+  Future<void> _pickAndUploadImage() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery, maxWidth: 512);
+    
+    if (image == null) return;
 
-    final tailleCtrl = TextEditingController(text: (_userData!['taille_cm'] ?? _userData!['height'] ?? "").toString());
-    final poidsCtrl = TextEditingController(text: (_userData!['poids_kg'] ?? _userData!['weight'] ?? "").toString());
-    final pathoCtrl = TextEditingController(text: _userData!['pathologie']?.toString() ?? "");
+    setState(() => _isLoading = true);
+    try {
+      final bytes = await File(image.path).readAsBytes();
+      final String base64Image = base64Encode(bytes);
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-        ),
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-          top: 30, left: 25, right: 25
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))),
-            const SizedBox(height: 20),
-            const Icon(Icons.psychology, size: 50, color: Color(0xFF0089BA)),
-            const SizedBox(height: 10),
-            const Text("Recalibrage de l'IA", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 25),
-            _buildTextField(tailleCtrl, "Taille (cm)", Icons.height, TextInputType.number),
-            const SizedBox(height: 15),
-            _buildTextField(poidsCtrl, "Poids (kg)", Icons.monitor_weight_outlined, const TextInputType.numberWithOptions(decimal: true)),
-            const SizedBox(height: 15),
-            _buildTextField(pathoCtrl, "Pathologie", Icons.medical_services_outlined, TextInputType.text),
-            const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: () async {
-                final auth = Provider.of<AuthProvider>(context, listen: false);
-                Navigator.pop(context);
-                setState(() => _isLoading = true);
-                
-                try {
-                  await ApiService.put("/profile/${auth.patientId}", {
-                    "taille_cm": int.tryParse(tailleCtrl.text) ?? 0,
-                    "poids_kg": double.tryParse(poidsCtrl.text) ?? 0.0,
-                    "pathologie": pathoCtrl.text,
-                  });
-                  await _fetchUserProfile();
-                } catch (e) {
-                  debugPrint("Erreur update: $e");
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0089BA),
-                minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-              ),
-              child: const Text("SYNCHRONISER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
-      ),
-    );
+      final response = await ApiService.put("/profile/${auth.patientId}", {
+        "photo_base64": base64Image,
+      });
+
+      if (response.statusCode == 200) {
+        _fetchUserProfile();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Photo synchronisée !"), backgroundColor: Colors.green)
+        );
+      }
+    } catch (e) {
+      debugPrint("Erreur photo: $e");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
-  Widget _buildTextField(TextEditingController ctrl, String label, IconData icon, TextInputType type) {
-    return TextField(
-      controller: ctrl,
-      keyboardType: type,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon, color: const Color(0xFF0089BA)),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
-        filled: true,
-        fillColor: Colors.grey.shade50,
-      ),
-    );
-  }
-
+  // --- WIDGETS ---
   @override
   Widget build(BuildContext context) {
     const primaryColor = Color(0xFF0089BA);
-    
-    if (_isLoading && _userData == null) {
+
+    if (_isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator(color: primaryColor)));
+    }
+
+    if (_errorMessage != null) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+              ElevatedButton(onPressed: _fetchUserProfile, child: const Text("Réessayer"))
+            ],
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -204,9 +157,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 children: [
                   _buildInfoCard("Données Médicales", [
                     _buildInfoRow("Âge", "${_userData?['age'] ?? '--'} ans", Icons.cake_outlined),
-                    _buildInfoRow("Taille", "${_userData?['taille_cm'] ?? _userData?['height'] ?? '--'} cm", Icons.straighten),
-                    _buildInfoRow("Poids", "${_userData?['poids_kg'] ?? _userData?['weight'] ?? '--'} kg", Icons.monitor_weight_outlined),
-                    _buildInfoRow("Fumeur", (_userData?['est_fumeur'] == true || _userData?['is_smoker'] == true) ? "Oui" : "Non", Icons.smoke_free),
+                    _buildInfoRow("Taille", "${_userData?['taille_cm'] ?? '--'} cm", Icons.straighten),
+                    _buildInfoRow("Poids", "${_userData?['poids_kg'] ?? '--'} kg", Icons.monitor_weight_outlined),
+                    _buildInfoRow("Fumeur", (_userData?['est_fumeur'] == true) ? "Oui" : "Non", Icons.smoke_free),
                     const Divider(height: 30),
                     _buildInfoRow("Pathologie", _userData?['pathologie'] ?? "Non spécifié", Icons.assignment_outlined),
                     const SizedBox(height: 20),
@@ -214,7 +167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: OutlinedButton.icon(
                         onPressed: _showEditDialog,
                         icon: const Icon(Icons.edit, size: 18),
-                        label: const Text("Modifier les infos"),
+                        label: const Text("Mettre à jour mon profil"),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: primaryColor,
                           side: const BorderSide(color: primaryColor),
@@ -235,14 +188,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildHeader(Color color) {
-    String displayName = "${_userData?['prenom'] ?? ''} ${_userData?['nom'] ?? 'Patient'}";
-    String? photoUrl = _userData?['photo_url'];
+    String name = _userData?['prenom'] ?? 'Patient';
+    String lastName = _userData?['nom'] ?? '';
+    String? photoBase64 = _userData?['photo_url']; // Dans ton backend, c'est souvent stocké ici
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.only(top: 60, bottom: 40),
       decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [color, color.withBlue(200)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+        gradient: LinearGradient(colors: [color, color.withBlue(200)]),
         borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(40), bottomRight: Radius.circular(40)),
       ),
       child: Column(
@@ -251,17 +205,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               CircleAvatar(
                 radius: 53,
-                backgroundColor: Colors.white.withOpacity(0.5),
+                backgroundColor: Colors.white24,
                 child: CircleAvatar(
                   radius: 50,
                   backgroundColor: Colors.white,
-                  // FIX : Gestion hybride local/réseau pour éviter l'erreur unsupported
-                  backgroundImage: _localImage != null 
-                    ? FileImage(_localImage!) as ImageProvider
-                    : (photoUrl != null && photoUrl.isNotEmpty) 
-                        ? NetworkImage(photoUrl) 
-                        : null,
-                  child: (_localImage == null && (photoUrl == null || photoUrl.isEmpty))
+                  backgroundImage: (photoBase64 != null && photoBase64.length > 100)
+                      ? MemoryImage(base64Decode(photoBase64))
+                      : null,
+                  child: (photoBase64 == null || photoBase64.length < 100)
                       ? const Icon(Icons.person, size: 50, color: Color(0xFF0089BA))
                       : null,
                 ),
@@ -280,9 +231,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           const SizedBox(height: 15),
-          Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+          Text("$name $lastName", style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
           Text(_userData?['email'] ?? "", style: const TextStyle(color: Colors.white70, fontSize: 14)),
         ],
+      ),
+    );
+  }
+
+  void _showEditDialog() {
+    final tCtrl = TextEditingController(text: _userData?['taille_cm']?.toString());
+    final pCtrl = TextEditingController(text: _userData?['poids_kg']?.toString());
+    final pathCtrl = TextEditingController(text: _userData?['pathologie']);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 20, right: 20, top: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Modifier mes constantes", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
+            TextField(controller: tCtrl, decoration: const InputDecoration(labelText: "Taille (cm)"), keyboardType: TextInputType.number),
+            TextField(controller: pCtrl, decoration: const InputDecoration(labelText: "Poids (kg)"), keyboardType: TextInputType.number),
+            TextField(controller: pathCtrl, decoration: const InputDecoration(labelText: "Pathologie")),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () async {
+                final auth = Provider.of<AuthProvider>(context, listen: false);
+                await ApiService.put("/profile/${auth.patientId}", {
+                  "taille_cm": int.tryParse(tCtrl.text),
+                  "poids_kg": double.tryParse(pCtrl.text),
+                  "pathologie": pathCtrl.text,
+                });
+                Navigator.pop(context);
+                _fetchUserProfile();
+              },
+              child: const Text("Enregistrer"),
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
       ),
     );
   }
@@ -316,10 +306,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-      child: const Row(children: [
-        Icon(Icons.bluetooth_connected, color: Colors.green),
-        SizedBox(width: 15),
-        Text("Capteur SmartBreath Connecté", style: TextStyle(fontWeight: FontWeight.bold)),
+      child: Row(children: [
+        Icon(_isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, color: _isConnected ? Colors.green : Colors.grey),
+        const SizedBox(width: 15),
+        Text(_isConnected ? "Capteur SmartBreath Connecté" : "Capteur déconnecté"),
       ]),
     );
   }

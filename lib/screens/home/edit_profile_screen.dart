@@ -20,54 +20,126 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _tailleController = TextEditingController(text: widget.currentData['taille'].toString());
-    _poidsController = TextEditingController(text: widget.currentData['poids'].toString());
-    _pathoController = TextEditingController(text: widget.currentData['pathologie']);
+    _tailleController = TextEditingController(
+        text: (widget.currentData['taille_cm'] ?? widget.currentData['taille'] ?? "").toString());
+    _poidsController = TextEditingController(
+        text: (widget.currentData['poids_kg'] ?? widget.currentData['poids'] ?? "").toString());
+    _pathoController = TextEditingController(
+        text: (widget.currentData['pathologie'] ?? "").toString());
+  }
+
+  @override
+  void dispose() {
+    _tailleController.dispose();
+    _poidsController.dispose();
+    _pathoController.dispose();
+    super.dispose();
   }
 
   void _saveChanges() async {
+    if (_tailleController.text.isEmpty || _poidsController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Veuillez remplir la taille et le poids")));
+      return;
+    }
+
     setState(() => _isSaving = true);
+    
     try {
-      final response = await ApiService.post("/profile/${widget.patientId}", { // Note: Utilisez ApiService.put si vous l'avez créé, sinon adaptez ApiService
-        "taille_cm": int.parse(_tailleController.text),
-        "poids_kg": double.parse(_poidsController.text),
+      final response = await ApiService.put("/profile/${widget.patientId}", {
+        "taille_cm": int.tryParse(_tailleController.text) ?? 0,
+        "poids_kg": double.tryParse(_poidsController.text) ?? 0.0,
         "pathologie": _pathoController.text,
       });
 
       if (response.statusCode == 200) {
         if (!mounted) return;
-        Navigator.pop(context, true); // Retourne 'true' pour rafraîchir le profil
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("IA Recalibrée avec succès !"), backgroundColor: Colors.green)
+        );
+        
+        Navigator.pop(context, true); 
+      } else {
+        throw Exception("Erreur serveur : ${response.statusCode}");
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erreur lors de la sauvegarde")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erreur de recalibrage : $e"), backgroundColor: Colors.red)
+      );
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    const primaryColor = Color(0xFF0089BA);
+
     return Scaffold(
-      appBar: AppBar(title: const Text("Modifier le profil"), backgroundColor: const Color(0xFF0089BA)),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: const Text("Recalibrage de l'IA", style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(25),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(controller: _tailleController, decoration: const InputDecoration(labelText: "Taille (cm)"), keyboardType: TextInputType.number),
-            const SizedBox(height: 15),
-            TextField(controller: _poidsController, decoration: const InputDecoration(labelText: "Poids (kg)"), keyboardType: TextInputType.number),
-            const SizedBox(height: 15),
-            TextField(controller: _pathoController, decoration: const InputDecoration(labelText: "Pathologie")),
-            const SizedBox(height: 30),
+            const Center(
+              child: Icon(Icons.psychology, size: 80, color: primaryColor),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              "Mettez à jour vos constantes pour affiner les prédictions du modèle XGBoost.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey, fontSize: 14),
+            ),
+            const SizedBox(height: 40),
+            
+            _buildCustomField(_tailleController, "Taille (cm)", Icons.height),
+            const SizedBox(height: 20),
+            _buildCustomField(_poidsController, "Poids (kg)", Icons.monitor_weight_outlined, isDecimal: true),
+            const SizedBox(height: 20),
+            _buildCustomField(_pathoController, "Pathologie / Diagnostic", Icons.medical_information_outlined, isText: true),
+            
+            const SizedBox(height: 40),
             _isSaving 
-              ? const CircularProgressIndicator() 
+              ? const Center(child: CircularProgressIndicator(color: primaryColor)) 
               : ElevatedButton(
                   onPressed: _saveChanges,
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0089BA), minimumSize: const Size(double.infinity, 50)),
-                  child: const Text("ENREGISTRER", style: TextStyle(color: Colors.white)),
-                )
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColor,
+                    minimumSize: const Size(double.infinity, 60),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                    elevation: 2,
+                  ),
+                  child: const Text(
+                    "SYNCHRONISER AVEC L'IA", 
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)
+                  ),
+                ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCustomField(TextEditingController controller, String label, IconData icon, {bool isDecimal = false, bool isText = false}) {
+    return TextField(
+      controller: controller,
+      keyboardType: isText ? TextInputType.text : TextInputType.numberWithOptions(decimal: isDecimal),
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, color: const Color(0xFF0089BA)),
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: const BorderSide(color: Color(0xFF0089BA))),
       ),
     );
   }

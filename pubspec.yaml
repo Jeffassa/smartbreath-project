@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
 
+
   # Interface et Icônes
   cupertino_icons: ^1.0.8
   google_fonts: ^6.3.3
@@ -22,6 +23,7 @@ dependencies:
 
   # Communication Backend
   http: ^1.6.0
+  flutter_blue_plus: ^1.31.0
 
   # Gestion d'état et Utilitaires
   provider: ^6.1.5+1
@@ -30,6 +32,7 @@ dependencies:
 
   # Notifications et Alertes Critiques
   flutter_local_notifications: ^19.5.0
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:

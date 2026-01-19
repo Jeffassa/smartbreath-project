@@ -1,16 +1,15 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
+import 'dart:typed_data';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
   static Future<void> init() async {
-    // Configuration Android
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    // Configuration iOS
     const DarwinInitializationSettings initializationSettingsIOS =
         DarwinInitializationSettings(
       requestAlertPermission: true,
@@ -38,17 +37,15 @@ class NotificationService {
   }
 
   static Future<void> showCriticalAlert(String status, String recommendation) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       'critical_alerts_v1', 
       'Alertes Urgentes SmartBreath',
       channelDescription: 'Notifications IA prioritaires pour détresse respiratoire',
       importance: Importance.max,
       priority: Priority.max,
       color: Colors.red,
-      backgroundColor: Colors.red,
       playSound: true,
       enableVibration: true,
-    
       vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]), 
       fullScreenIntent: true, 
       category: AndroidNotificationCategory.alarm,
@@ -62,7 +59,8 @@ class NotificationService {
       sound: 'default',
     );
 
-    const NotificationDetails platformDetails = NotificationDetails(
+
+    final NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
     );
@@ -77,7 +75,7 @@ class NotificationService {
   }
 
   static Future<void> showPreventiveAlert(String recommendation) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       'preventive_alerts_v1',
       'Alertes Préventives',
       channelDescription: 'Conseils basés sur l\'analyse prédictive IA',
@@ -93,7 +91,8 @@ class NotificationService {
       interruptionLevel: InterruptionLevel.active,
     );
 
-    const NotificationDetails platformDetails = NotificationDetails(
+    // CHANGEMENT ICI : 'final' au lieu de 'const'
+    final NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
     );
