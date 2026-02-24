@@ -1,5 +1,8 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
+import 'dart:typed_data';  // ← AJOUTE ÇA
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter/material.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
@@ -38,18 +41,16 @@ class NotificationService {
   }
 
   static Future<void> showCriticalAlert(String status, String recommendation) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       'critical_alerts_v1', 
       'Alertes Urgentes SmartBreath',
       channelDescription: 'Notifications IA prioritaires pour détresse respiratoire',
       importance: Importance.max,
       priority: Priority.max,
       color: Colors.red,
-      backgroundColor: Colors.red,
       playSound: true,
       enableVibration: true,
-    
-      vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]), 
+      vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]),  
       fullScreenIntent: true, 
       category: AndroidNotificationCategory.alarm,
     );
@@ -62,7 +63,7 @@ class NotificationService {
       sound: 'default',
     );
 
-    const NotificationDetails platformDetails = NotificationDetails(
+     NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
     );

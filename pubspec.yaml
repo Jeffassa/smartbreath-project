@@ -41,5 +41,7 @@ flutter:
 
   # Gestion des assets (images et icônes)
   assets:
-    - assets/images/
+    - assets/
     - assets/icons/
+    - assets/images/
+    

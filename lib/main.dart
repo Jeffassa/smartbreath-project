@@ -7,6 +7,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/home/main_scaffold.dart';
 import 'screens/splash_screen.dart';
+import 'screens/welcome_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -58,7 +59,7 @@ class SmartBreathApp extends StatelessWidget {
           ),
         ),
 
-        cardTheme: CardTheme(
+         cardTheme: CardThemeData(
           elevation: 2,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           color: Colors.white,
@@ -68,6 +69,7 @@ class SmartBreathApp extends StatelessWidget {
       initialRoute: '/splash',
       routes: {
         '/splash': (context) => const SplashScreen(),
+        '/welcome': (context) => const WelcomeScreen(),
         '/': (context) => const LoginScreen(),
         '/register': (context) => const RegisterScreen(),
         '/dashboard': (context) => const MainScaffold(),
